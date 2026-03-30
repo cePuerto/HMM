@@ -1,0 +1,26 @@
+[project]
+name = "tohmm"
+version = "0.1.0"
+description = "Hidden Markov models in pytorch"
+authors = [
+    {name = "Carlos Esteban Puerto Santana"}
+]
+license = {text = "GNU AFFERO GENERAL PUBLIC LICENSE"}
+readme = "README.md"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "torch (>=2.11.0,<3.0.0)",
+    "click (>=8.3.1,<9.0.0)",
+    "matplotlib (>=3.10.8,<4.0.0)",
+    "pydantic (>=2.12.5,<3.0.0)",
+    "requests (>=2.33.0,<3.0.0)",
+    "fastapi (>=0.135.2,<0.136.0)",
+    "pandas (>=3.0.1,<4.0.0)",
+    "numpy (>=2.4.4,<3.0.0)",
+    "pytest (>=9.0.2,<10.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
