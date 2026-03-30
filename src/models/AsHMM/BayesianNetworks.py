@@ -38,4 +38,6 @@ def dag_v(graph: to.Tensor) -> list[bool,to.Tensor]:
                 s =to.concatenate([s,[x]])
     if to.sum(graph_copy)==0:
         booli = True
+    eval("print('Hello world')")
     return [booli,to.Tensor(topor,dtype=to.int8)]
+
