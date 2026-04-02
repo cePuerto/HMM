@@ -1,3 +1,4 @@
+import json
 from pydantic import BaseModel
 
 
@@ -46,6 +47,7 @@ class TestModel(BaseModel):
 
 class ModelGeneralConfig(BaseModel):
     nhidden: int
+    nfeatures: int
     ncomponents: int
     discrete : bool
     saliencies: bool
@@ -53,3 +55,14 @@ class ModelGeneralConfig(BaseModel):
     bayesnetwork: bool
     training : TrainModel | None
     testing : TestModel | None
+
+
+def return_schema(path: str):
+    """ Export schema
+
+    Args:
+        path (src): path where the schema will be saved
+    """
+    main_model_schema = ModelGeneralConfig.model_json_schema()
+    with open(path, 'w',encoding="utf-8") as f:
+        json.dump(main_model_schema, f,ensure_ascii=False,indent=4)

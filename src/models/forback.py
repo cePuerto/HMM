@@ -66,10 +66,12 @@ class ForwardBackward(nn.Module):
         self.beta = Beta
 
 
-    def compute_gamma(self):
+    def compute_gamma(self, probt: to.Tensor):
         """
         Compute Gamma or the latent probabilities
         """
+        self.forward_pass(probt)
+        self.backward_pass(probt)
         num = self.alpha +self.beta
         den = to.log(to.sum(to.exp(self.alpha+self.beta),dim=1))[None,:].T
         self.gamma = num-den
@@ -118,8 +120,8 @@ class ForwardBackward(nn.Module):
         nume = []
         deno = []
         for i in range(self.nstates):
-            alfat = (self.alpha.T[i])[:self.length-1] 
-            betat = self.beta[1:].T 
+            alfat = (self.alpha.T[i])[:self.length-1]
+            betat = self.beta[1:].T
             num = self.transtion[i]*to.sum(to.exp(alfat+betat+ bj[1:].T),dim=1)
             den = to.sum(num)
             nume.append(num)

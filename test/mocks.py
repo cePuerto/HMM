@@ -1,5 +1,6 @@
 import torch as to
 
+MAXAR = 3
 BN1 = to.Tensor(
     [
         [0, 1, 0, 0, 0],
@@ -9,6 +10,16 @@ BN1 = to.Tensor(
         [0, 0, 0, 0, 0],
     ]
 ).int()
+AR1 = to.Tensor([0, 1, 0, 2, 3]).int()
+BN1_W = to.Tensor(
+    [
+        [1.1, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 1.2, 0.3, 0.0, 0.0, 0.1, 0.0, 0.0],
+        [0.0, 0.0, 2.3, 0.8, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 3.1, 0.1, 0.3, 0.4, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 8.0, 0.1, 0.2, 0.3]
+    ]
+)
 BN2 = to.Tensor(
     [
         [0, 1, 1, 1, 1],
@@ -18,7 +29,15 @@ BN2 = to.Tensor(
         [0, 0, 0, 0, 0],
     ]
 ).int()
-
+AR2 = to.Tensor([1, 2, 1, 2, 0]).int()
+BN2_W = to.Tensor([
+        [1.2, 0.1, 0.2, 0.3, 0.4, 0.1, 0.0, 0.0],
+        [0.0, 4.5, 0.6, 0.5, 0.2, 0.1, 0.1, 0.0],
+        [0.0, 0.0, 3.2, 0.2, 0.1, 0.2, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 2.4, 0.6, 0.3, 0.1, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 1.1, 0.0, 0.0, 0.0],
+    ]
+)
 BN3 = to.Tensor(
     [
         [0 ,0, 0],
@@ -26,6 +45,14 @@ BN3 = to.Tensor(
         [0, 1, 0]
     ]
 ).int()
+BN3_W = to.Tensor(
+    [
+        [1.0,  0.0, 0.0],
+        [0.5, -3.5, 0.0],
+        [0.0, -1.0, 1.0],
+    ]
+)
+SIGMA3_2 = to.Tensor([4, 4, 3])
 
 NOTABN1 = to.Tensor(
     [
@@ -46,38 +73,13 @@ NOTABN2 = to.Tensor(
         [0, 0, 0, 0, 0],
     ]
 ).int()
-
-MAXAR = 3
-
-AR1 = to.Tensor([0, 1, 0, 2, 3]).int()
-AR2 = to.Tensor([1, 1, 1, 1, 1]).int()
-
-BN1_W = [
-    to.Tensor([0.1, -0.1]),
-    to.Tensor([0.2, -0.1, 0.01]),
-    to.Tensor([-0.2,  0.1]),
-    to.Tensor([0.1, -0.2, 0.03, -0.04]),
-    to.Tensor([0.2, 0.01, 0.03, -0.01]),
-]
-BN2_W = [
-    to.Tensor([0.5, -0.2, 0.3, -0.1, 0.1, 0.01]),
-    to.Tensor([0.5, -0.2, 0.3, -0.1, 0.01]),
-    to.Tensor([0.5, -0.2, 0.3, 0.01]),
-    to.Tensor([0.5, -0.2, 0.01]),
-    to.Tensor([0.5, 0.01]),
-]
-BN3_W = [
-    to.Tensor([1.0]),
-    to.Tensor([-3.5, 0.5]),
-    to.Tensor([1, -1])
-]
-
-SIGMA3_2 = to.Tensor([4, 4, 3])
-
-BATCH = 200
+BATCH = 1000
 DATAMOCK = to.stack(
     [
         to.normal(to.Tensor([1, 2, -1, -2, 0]), to.Tensor([1, 0.5, 0.7, 1.1, 0.9]))
         for _ in range(BATCH)
     ]
 )
+NSTATES = 5
+TRANSITION = to.ones(NSTATES,NSTATES)/NSTATES
+INITIAL = to.ones(NSTATES)/NSTATES

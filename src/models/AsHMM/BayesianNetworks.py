@@ -3,19 +3,11 @@ from torch import nn
 
 
 class LGBayesianNetwork(nn.Module):
- 
+
     def __init__(self,
-                 graphs: to.Tensor,
-                 arorders: to.Tensor | None = None,
-                 maxorder: int = 0,
-                 weights: list | None = None,
-                 sigmas2: to.Tensor | None = None):
+                 graphs: to.Tensor):
         super(LGBayesianNetwork, self).__init__()
-        self.graphs = graphs
-        self.arorders = arorders
-        self.maxorder = maxorder
-        self.weights = weights
-        self.sigmas2 = sigmas2
+        self.graphs = graphs.int()
         nstates, nfeatures, _ = graphs.shape
         self.nstates = nstates
         self.nfeatures = nfeatures
@@ -27,15 +19,6 @@ class LGBayesianNetwork(nn.Module):
             else:
                 topor[i] = salida[1]
         self.order = topor.int()
-
-
-    def prior_graph(self) -> to.Tensor:
-        """ Generates an empty prior graph for each hidden state
-
-        Returns:
-            to.Tensor: tensor representing empty BN for each state
-        """
-        return to.zeros([self.nstates, self.nvariables, self.nvariables], dtype=to.int)
 
 
     def my_parents(self, graph: to.Tensor, j: int) -> to.Tensor:
@@ -50,6 +33,24 @@ class LGBayesianNetwork(nn.Module):
         """
         index = to.where(graph[j] == 1)[0]
         return to.sort(index).values
+    
+    def my_weights(self, parents: to.Tensor, weight: to.Tensor, aror: to.Tensor, j: int) -> to.Tensor:
+        """ extract the weights from the 
+
+        Args:
+            parents (to.Tensor): parents of node j
+            weight (to.Tensor): weights matrix
+            aror (to.Tensor): Ar order vector
+            j (int): node 
+
+        Returns:
+            to.Tensor: simplified weight vector
+        """
+        if aror[j] > 0:
+            aux = to.Tensor([j, *list(parents), *[self.nfeatures+i for i in range(aror[j])]]).int()
+        else:
+            aux = to.Tensor([j, *list(parents)]).int()
+        return weight[j][aux]
 
 
     def dag_v(self, graph: to.Tensor) -> list[bool, to.Tensor]:
@@ -96,7 +97,7 @@ class LGBayesianNetwork(nn.Module):
         self,
         x: to.Tensor,
         graph: to.Tensor,
-        weigths: to.Tensor,
+        weights: to.Tensor,
         aror: to.Tensor,
         maxar: int,
     ) -> to.Tensor:
@@ -106,7 +107,7 @@ class LGBayesianNetwork(nn.Module):
         Args:
             x (to.Tensor): input time series
             graph (to.Tensor): graph matrix
-            weigths (to.Tensor): weights
+            weights (to.Tensor): weights
             aror (to.Tensor): vector indicating the ar order for each feature
             maxar (int): maximum lag
 
@@ -119,27 +120,32 @@ class LGBayesianNetwork(nn.Module):
             pa_k = list(self.my_parents(graph, k))
             acum = to.cat([to.ones([length - maxar, 1]), x[maxar:, pa_k]], axis=1)
             if aror[k] > 0:
-                racum = to.stack([x[maxar - j : -j, k] for j in range(1, aror[k] + 1)]).T
+                racum = to.stack([x[maxar - j : -j, k] for j in range(1, aror[k] + 1)]).transpose(0,1)
                 acum = to.cat([acum, racum], dim=1)
-            mu[:, k] = to.sum(acum * weigths[k][None, :], dim=1)
+            weight = self.my_weights(pa_k, weights, aror, k)[None,:]
+            mu[:, k] = to.sum(acum * weight, dim=1)
         return mu
 
 
-    def lg_temp_mu_all(self, x: to.Tensor)-> to.Tensor:
-        """ Computes temporal means for a time series for each hidden state
+    def lg_temp_mu_all(self,
+                        x: to.Tensor,
+                        weights: to.Tensor,
+                        arorder: to.Tensor,
+                        maxorder: int)-> to.Tensor:
+        """Computes temporal means for a time series for each hidden state
 
         Args:
             x (to.Tensor): input time series
+            weights (to.Tensor): each hidden state network weights  
+            arorder (to.Tensor): ar order of each network
+            maxorder (int): maximum allowed order
 
         Returns:
-            to.Tensor: temporal means for each hidden state
+            to.Tensor: temporal mean for each hidden state
         """
-        assert self._weights is not None
-        assert self._arorders is not None
-        assert to.max(self.arorders) <= self.maxorder
         return to.stack([
             self.lg_temp_mu(
-                x, self.graphs[i], self.weights[i], self.arorders[i], self.maxorder)
+                x, self.graphs[i], weights[i], arorder[i], maxorder)
                 for i in range(self.nstates)])
 
 
@@ -171,7 +177,7 @@ class LGBayesianNetwork(nn.Module):
                 if arord[s]>0:
                     mui[s] = mui[s]/(1.-to.sum(weights[s][-arord[s]:]))
             else:
-                ws = weights[s]
+                ws = self.my_weights(pas, weights, arord, s)
                 s2s = (covi[pas])[:,pas]
                 covi[s][s] = sigmas2[s] + (ws[1:len(pas)+1])[None,:] @ s2s @ (ws[1:len(pas)+1])[:,None]
                 mui[s] = ws[:len(pas)+1] @ to.cat([to.Tensor([1.]),mui[pas]])
@@ -183,24 +189,29 @@ class LGBayesianNetwork(nn.Module):
         return [mui, covi]
 
 
-    def mvn_param_all(self)-> list:
+    def mvn_param_all(self,
+                    weights: to.Tensor,
+                    sigmas2: to.Tensor,
+                    arorder: to.Tensor)-> list:
         """Represent all the linear gaussian network as multivariate normal distributions
 
+        Args:
+            weights (to.Tensor): network weights
+            sigmas2 (to.Tensor): network variances
+            arorder (to.Tensor): network AR orders
+
         Returns:
-            list: list with all vectors means and covariance matrices for each state
+            list: list with tuples containing each hidden states' mean vector and covariance matrix
         """
-        assert self.weights is not None
-        assert self.arorders is not None
-        assert to.max(self.arorders) <= self.maxorder
         params = []
         for i in range(self.nstates):
             params.append(
                 self.mvn_param(
                     self.graphs[i],
                     self.order[i],
-                    self.weights[i],
-                    self.sigmas2[i],
-                    self.arorders[i]))
+                    weights[i],
+                    sigmas2[i],
+                    arorder[i]))
         return params
 
     def forward(self):
