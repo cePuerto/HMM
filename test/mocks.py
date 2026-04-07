@@ -81,5 +81,6 @@ DATAMOCK = to.stack(
     ]
 )
 NSTATES = 5
+PROBT = to.log(to.clip(to.rand([NSTATES,BATCH]),1e10))
 TRANSITION = to.ones(NSTATES,NSTATES)/NSTATES
 INITIAL = to.ones(NSTATES)/NSTATES

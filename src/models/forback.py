@@ -6,12 +6,11 @@ class ForwardBackward(nn.Module):
 
     def __init__(self, transition: to.Tensor, pi: to.Tensor, probt : to.Tensor):
         super(ForwardBackward, self).__init__()
-        self.transtion = transition
+        self.transition = transition
         self.pi = pi
-        nstates, length, nfeatures = probt.shape
+        nstates, length = probt.shape
         self.nstates = nstates
         self.length = length
-        self.nfeatures= nfeatures
         self.alpha = None
         self.beta = None
         self.clist = None
@@ -32,19 +31,18 @@ class ForwardBackward(nn.Module):
             probt (to.Tensor): Temporal probabilities
         """
         pi = to.clip(self.pi,1e-8)
-        alfa = to.log(pi)+ probt[0]
-        cd = -to.max(alfa)-to.log(to.sum(to.exp(alfa-to.max(alfa))))
+        alfa = to.log(pi)+ probt[:,0]
+        cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
         Clist = to.Tensor([cd])
         alfa = alfa+cd
         Alfa = [alfa]
         for t in range(1,self.length):
             alfa = self.forward_step(alfa, probt, t)
-            cd = -to.max(alfa)-to.log(to.sum(to.exp(alfa-to.max(alfa))))
-            Clist = to.cat([Clist,[cd]])
+            cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
+            Clist = to.cat([Clist,to.Tensor([cd])])
             alfa = cd + alfa
             Alfa.append(alfa)
-        Alfa = to.Tensor(Alfa)
-        self.alpha = Alfa
+        self.alpha = to.stack(Alfa)
         self.clist = Clist
 
 
@@ -54,16 +52,15 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): temporal probabilities
         """
-        beta = to.zeros(self.nstates)
-        nClist = self.clist[::-1]
+        beta = to.zeros([self.nstates])
+        nClist = self.clist.flip(dims=[0])
         beta = beta + nClist[0]
         Beta = [beta]
         for t in range(1,self.length):
             beta = self.backward_step(beta, probt, self.length-t)
             beta = beta + nClist[t]
             Beta.append(beta)
-        Beta= to.flipud(Beta)
-        self.beta = Beta
+        self.beta = to.flipud(to.stack(Beta))
 
 
     def compute_gamma(self, probt: to.Tensor):
@@ -88,9 +85,9 @@ class ForwardBackward(nn.Module):
         Returns:
             to.Tensor: next forward variable
         """
-        arg = to.exp(alfa) @ self.transtion
+        arg = to.exp(alfa) @ self.transition
         arg = to.clip(arg, 1e-8)
-        return probt[t]+ to.log(arg)
+        return probt[:,t]+ to.log(arg)
 
 
     def backward_step(self,beta : to.Tensor, probt : to.Tensor, t : int)-> to.Tensor:
@@ -105,7 +102,7 @@ class ForwardBackward(nn.Module):
             to.Tensor: next backward variable
         """
         maxi = to.max(beta)
-        arg = to.dot(self.transition,to.exp(probt[t]+beta-maxi))
+        arg = self.transition @ to.exp(probt[:,t]+beta-maxi)
         arg = to.clip(arg,1e-8)
         return  maxi+to.log(arg)
 
@@ -122,7 +119,7 @@ class ForwardBackward(nn.Module):
         for i in range(self.nstates):
             alfat = (self.alpha.T[i])[:self.length-1]
             betat = self.beta[1:].T
-            num = self.transtion[i]*to.sum(to.exp(alfat+betat+ bj[1:].T),dim=1)
+            num = self.transition[i]*to.sum(to.exp(alfat+betat+ bj[1:].T),dim=1)
             den = to.sum(num)
             nume.append(num)
             deno.append(den)
@@ -175,5 +172,4 @@ class ForwardBackward(nn.Module):
             to.Tensor: log likelihood of the time series
         """
         self.forward_pass(probt)
-        self.backward_pass(probt)
         return to.sum(-self.clist)
