@@ -73,6 +73,7 @@ NOTABN2 = to.Tensor(
         [0, 0, 0, 0, 0],
     ]
 ).int()
+MAR = 3
 BATCH = 1000
 DATAMOCK = to.stack(
     [
@@ -81,6 +82,8 @@ DATAMOCK = to.stack(
     ]
 )
 NSTATES = 5
-PROBT = to.log(to.clip(to.rand([NSTATES,BATCH]),1e10))
+PROBT = to.log(to.clip(to.rand([NSTATES,BATCH-MAR]),1e10))
 TRANSITION = to.ones(NSTATES,NSTATES)/NSTATES
 INITIAL = to.ones(NSTATES)/NSTATES
+GRAPHS = to.zeros([NSTATES,5,5])
+ARORDERS = 2*to.ones([NSTATES,5]).int()

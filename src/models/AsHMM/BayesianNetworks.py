@@ -20,8 +20,8 @@ class LGBayesianNetwork(nn.Module):
                 topor[i] = salida[1]
         self.order = topor.int()
 
-
-    def my_parents(self, graph: to.Tensor, j: int) -> to.Tensor:
+    @staticmethod
+    def my_parents(graph: to.Tensor, j: int) -> to.Tensor:
         """ Returns the parents of a node of a graph
 
         Args:

@@ -9,16 +9,16 @@ def test_forwardbackward():
     alpha = subject.alpha
     beta = subject.beta
     gamma = to.exp(subject.gamma)
-    assert alpha.shape == to.Size([BATCH,NSTATES])
-    assert beta.shape == to.Size([BATCH,NSTATES])
-    assert gamma.shape == to.Size([BATCH,NSTATES])
+    assert alpha.shape == to.Size([BATCH-MAR,NSTATES])
+    assert beta.shape == to.Size([BATCH-MAR,NSTATES])
+    assert gamma.shape == to.Size([BATCH-MAR,NSTATES])
     assert to.sum(gamma[0]).item() > 1- 1e-5
     counter = 0
-    for i in range(BATCH):
+    for i in range(BATCH-MAR):
         prueba =to.sum(gamma[i]).item()
         if prueba > 1- 1e-5 and prueba < 1 +1e-5  :
             counter+=1
-    assert counter == BATCH
+    assert counter == BATCH-MAR
 
 def test_compute_sa():
     subject = ForwardBackward(TRANSITION, INITIAL, NSTATES)
@@ -35,12 +35,28 @@ def test_compute_sp():
     subject.compute_gamma(PROBT)
     sp = subject.act_initial()
     assert sp.shape == to.Size([NSTATES])
-    assert to.sum(sp).item() >= 1 - 1e-5 
-    assert to.sum(sp).item() <= 1 + 1e-5 
+    assert to.sum(sp).item() >= 1 - 1e-5
+    assert to.sum(sp).item() <= 1 + 1e-5
 
 
 def test_computes_sb():
-    return 0
+    subject = ForwardBackward(TRANSITION, INITIAL, NSTATES)
+    subject.compute_gamma(PROBT)
+    sb = subject.act_weights_ashmm(DATAMOCK, GRAPHS, ARORDERS, MAR)
+    bmatrix = sb[0]
+    avector = sb[1]
+    assert len(bmatrix) == 5
+    counter_matrix = 0
+    for _, state in enumerate(bmatrix):
+        if to.stack(state).shape == to.Size([5,3,3]):
+            counter_matrix +=1
+    counter_vector = 0
+    for _, state in enumerate(avector):
+        if to.stack(state).shape == to.Size([5,3]):
+            counter_vector +=1
+    assert counter_vector == NSTATES
+    assert counter_matrix == NSTATES
+
 
 
 def test_compute_sv():

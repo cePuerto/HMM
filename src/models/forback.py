@@ -1,5 +1,6 @@
 import torch as to
 from torch import nn
+from src.models.AsHMM.BayesianNetworks import LGBayesianNetwork as lgb
 
 
 class ForwardBackward(nn.Module):
@@ -15,6 +16,39 @@ class ForwardBackward(nn.Module):
         self.gamma = None
         self.phi = None
         self.psi = None
+
+
+    def forward_step(self, alfa: to.Tensor, probt: to.Tensor, t: int) -> to.Tensor:
+        """ Does an inductive step in the alfa variable
+
+        Args:
+            alfa (to.Tensor): forward variable
+            probt (to.Tensor): temporal probabilities
+            t (int): time index
+
+        Returns:
+            to.Tensor: next forward variable
+        """
+        arg = to.exp(alfa) @ self.transition
+        arg = to.clip(arg, 1e-8)
+        return probt[:,t]+ to.log(arg)
+
+
+    def backward_step(self,beta : to.Tensor, probt : to.Tensor, t : int)-> to.Tensor:
+        """ An iteration in the backward variable
+
+        Args:
+            beta (to.Tensor): backward variable
+            probt (to.Tensor): temporal probabilities
+            t (int): time index
+
+        Returns:
+            to.Tensor: next backward variable
+        """
+        maxi = to.max(beta)
+        arg = self.transition @ to.exp(probt[:,t]+beta-maxi)
+        arg = to.clip(arg,1e-8)
+        return  maxi+to.log(arg)
 
 
     def forward_pass(self, probt: to.Tensor):
@@ -69,46 +103,13 @@ class ForwardBackward(nn.Module):
         self.gamma = num-den
 
 
-    def forward_step(self, alfa: to.Tensor, probt: to.Tensor, t: int) -> to.Tensor:
-        """ Does an inductive step in the alfa variable
-
-        Args:
-            alfa (to.Tensor): forward variable
-            probt (to.Tensor): temporal probabilities
-            t (int): time index
-
-        Returns:
-            to.Tensor: next forward variable
-        """
-        arg = to.exp(alfa) @ self.transition
-        arg = to.clip(arg, 1e-8)
-        return probt[:,t]+ to.log(arg)
-
-
-    def backward_step(self,beta : to.Tensor, probt : to.Tensor, t : int)-> to.Tensor:
-        """ An iteration in the backward variable
-
-        Args:
-            beta (to.Tensor): backward variable
-            probt (to.Tensor): temporal probabilities
-            t (int): time index
-
-        Returns:
-            to.Tensor: next backward variable
-        """
-        maxi = to.max(beta)
-        arg = self.transition @ to.exp(probt[:,t]+beta-maxi)
-        arg = to.clip(arg,1e-8)
-        return  maxi+to.log(arg)
-
-
     def act_transition(self,probt: to.Tensor):
         """Computes statistics to update the transition matrix
 
         Args:
             probt (to.Tensor): temporal probabilities
         """
-        num = self.transition*(self.alpha[:-1].T @  (self.beta[1:] * probt[:,1:].T))
+        num = self.transition*to.exp(self.alpha[:-1].T @  (self.beta[1:] * probt[:,1:].T))
         den = to.sum(num,dim=1)
         return [num, den]
 
@@ -168,28 +169,29 @@ class ForwardBackward(nn.Module):
             list: [B, a] updating statistics, the parameter is the solution to Bx = a
         """
         length = len(x)
+        nfeatures = len(x[0])
         bc = []
         ac = []
         for i in range(self.nstates):
             gi = graphs[i]
-            wi = self.gamma[i]
+            wi = self.gamma[:, i][:,None]
             arori = arorders[i]
             ack = []
             bck = []
-            for k in range(self.nfeatures):
-                pak = self.lgnetworks.my_parents(gi,k)
+            for k in range(nfeatures):
+                pak = lgb.my_parents(gi,k)
                 y = to.cat([to.ones([length - maxar, 1]), x[maxar:,pak]], axis=1)
                 if arori[k] > 0:
                     z = to.stack([x[maxar - j : -j, k] for j in range(1, arori[k] + 1)]).transpose(0,1)
                     y = to.cat([y, z], dim=1)
-                a = to.sum(wi*x[maxar:,k]*y,dim=1)
-                b = [to.sum(wi*y,dim=1)]
+                a = to.sum(wi * x[maxar:, k][:,None] * y,dim=0)
+                b = [to.sum(wi * y,dim=0)]
                 for pa in pak:
-                    to.sum(wi*x[maxar:,pa]*y,dim=1)
-                for j in range(1,arori[k]+1):
-                    zi = x[maxar- j : -j, k]
-                    b.append(to.sum(wi*zi*y,dim=1))
-                bck.append(to.Tensor(b).transpose(0,1))
+                    to.sum(wi * x[maxar:,pa] * y,dim=0)
+                for j in range(1, arori[k] + 1):
+                    zi = x[maxar - j : -j, k][:,None]
+                    b.append(to.sum(wi * zi * y,dim=0))
+                bck.append(to.stack(b))
                 ack.append(a)
             bc.append(bck)
             ac.append(ack)
