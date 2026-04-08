@@ -3,7 +3,7 @@ from src.models.forback import ForwardBackward
 from test.mocks import *
 
 def test_forback_forwardbackward():
-    subject = ForwardBackward(TRANSITION, INITIAL, PROBT)
+    subject = ForwardBackward(TRANSITION, INITIAL, NSTATES)
     subject.forward_pass(PROBT)
     subject.backward_pass(PROBT)
     subject.compute_gamma(PROBT)

@@ -4,24 +4,17 @@ from torch import nn
 
 class ForwardBackward(nn.Module):
 
-    def __init__(self, transition: to.Tensor, pi: to.Tensor, probt : to.Tensor):
+    def __init__(self, transition: to.Tensor, pi: to.Tensor, nstates: int):
         super(ForwardBackward, self).__init__()
         self.transition = transition
         self.pi = pi
-        nstates, length = probt.shape
         self.nstates = nstates
-        self.length = length
         self.alpha = None
         self.beta = None
         self.clist = None
         self.gamma = None
         self.phi = None
         self.psi = None
-        self.pi_numerator = None
-        self.tra_numerator = None
-        self.tra_denominator = None
-        self.rho_numerator = None
-        self.rho_denominator = None
 
 
     def forward_pass(self, probt: to.Tensor):
@@ -30,13 +23,14 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): Temporal probabilities
         """
+        length = len(probt)
         pi = to.clip(self.pi,1e-8)
         alfa = to.log(pi)+ probt[:,0]
         cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
         Clist = to.Tensor([cd])
         alfa = alfa+cd
         Alfa = [alfa]
-        for t in range(1,self.length):
+        for t in range(1,length):
             alfa = self.forward_step(alfa, probt, t)
             cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
             Clist = to.cat([Clist,to.Tensor([cd])])
@@ -52,12 +46,13 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): temporal probabilities
         """
+        length = len(probt)
         beta = to.zeros([self.nstates])
         nClist = self.clist.flip(dims=[0])
         beta = beta + nClist[0]
         Beta = [beta]
-        for t in range(1,self.length):
-            beta = self.backward_step(beta, probt, self.length-t)
+        for t in range(1,length):
+            beta = self.backward_step(beta, probt, length-t)
             beta = beta + nClist[t]
             Beta.append(beta)
         self.beta = to.flipud(to.stack(Beta))
@@ -113,24 +108,30 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): temporal probabilities
         """
+        length = len(probt)
         bj = probt
         nume = []
         deno = []
         for i in range(self.nstates):
-            alfat = (self.alpha.T[i])[:self.length-1]
+            alfat = (self.alpha.T[i])[:length-1]
             betat = self.beta[1:].T
             num = self.transition[i]*to.sum(to.exp(alfat+betat+ bj[1:].T),dim=1)
             den = to.sum(num)
             nume.append(num)
             deno.append(den)
-        self.tra_numerator = to.Tensor(nume)
-        self.tra_denominator = to.Tensor(deno)
+        tra_numerator = to.Tensor(nume)
+        tra_denominator = to.Tensor(deno)
+        return [tra_numerator, tra_denominator]
 
 
-    def act_initial(self):
-        """ Computes statistics to update initial distribution parameter
+    def act_initial(self) -> to.Tensor:
+        """Computes statistics to update initial distribution parameter
+
+        Returns:
+            to.Tensor: initial numerator statistic
         """
-        self.pi_numerator = to.exp(self.gamma[0])
+        return to.exp(self.gamma[0])
+
 
     def compute_psiphi(self, probtk: to.Tensor, pfit: to.Tensor, pgt: to.Tensor, rho: to.Tensor):
         """Compute latent probabilities of relecant and not relevant features
@@ -154,22 +155,95 @@ class ForwardBackward(nn.Module):
         self.psi = to.Tensor(self.psi)
 
 
-    def act_rho(self): #Revisar con cuidado
+    def act_rho(self) -> list: #Revisar con cuidado
+        """Compute statistics to update relevancy parameter 
+
+        Returns:
+            list: [numerator, denominator] updating statistics
         """
-        Compute statistics to update relevancy parameter 
-        """
-        self.rho_numerator = to.sum(self.psi,dim=1)
-        self.rho_denominator = to.sum(self.gamma,dim=0)[:,None]
+        rho_numerator = to.sum(self.psi,dim=1)
+        rho_denominator = to.sum(self.gamma,dim=0)[:,None]
+        return [rho_numerator, rho_denominator]
 
 
-    def forward(self, probt: to.Tensor) -> to.Tensor:
-        """ Computes the log-likelihood of the time series
+    def act_weights_ashmm(self,x: to.Tensor, graphs: to.Tensor, arorders: to.Tensor, maxar: int) -> list: 
+        """Compute the required statistics to update ashmm weigths
 
         Args:
-            probt (to.Tensor): temporal probabilities
+            x (to.Tensor): input time series
+            graphs (to.Tensor): tensor representing graphs
+            arorders (to.Tensor): tensor representing AR orders
+            maxar (int): maximum AR order
+
+        Returns:
+            list: [B, a] updating statistics, the parameter is the solution to Bx = a
+        """
+        length = len(x)
+        bc = []
+        ac = []
+        for i in range(self.nstates):
+            gi = graphs[i]
+            wi = self.gamma[i]
+            arori = arorders[i]
+            ack = []
+            bck = []
+            for k in range(self.nfeatures):
+                pak = self.lgnetworks.my_parents(gi,k)
+                y = to.cat([to.ones([length - maxar, 1]), x[maxar:,pak]], axis=1)
+                if arori[k] > 0:
+                    z = to.stack([x[maxar - j : -j, k] for j in range(1, arori[k] + 1)]).transpose(0,1)
+                    y = to.cat([y, z], dim=1)
+                a = to.sum(wi*x[maxar:,k]*y,dim=1)
+                b = [to.sum(wi*y,dim=1)]
+                for pa in pak:
+                    to.sum(wi*x[maxar:,pa]*y,dim=1)
+                for j in range(1,arori[k]+1):
+                    zi = x[maxar- j : -j, k]
+                    b.append(to.sum(wi*zi*y,dim=1))
+                bck.append(to.Tensor(b).transpose(0,1))
+                ack.append(a)
+            bc.append(bck)
+            ac.append(ack)
+        return [bc, ac]
+
+
+    def act_sigma2_ashmm(self, x: to.Tensor, mut: to.Tensor, maxar: int) -> list:
+        """Computes required statistics to compute ashmm variances 
+
+        Args:
+            x (to.Tensor): input time series
+            mut (to.Tensor): temporal means
+            maxar (int): maximum AR order
+
+        Returns:
+            list: [numerator, denominator] updating statistics
+        """
+        nums = []
+        dens = []
+        for i in range(self.nstates):
+            wi= self.gamma[i]
+            num = to.sum(wi*((x[maxar:]-mut[i]).transpose(0,1))**2,dim=1)
+            den = to.sum(wi)
+            nums.append(num)
+            dens.append(den)
+        return [to.stack(nums), to.stack(dens)]
+
+
+    def clear_statistics(self):
+        """ Clear all statistics
+        """
+        self.alpha = None
+        self.beta = None
+        self.clist = None
+        self.gamma = None
+        self.phi = None
+        self.psi = None
+
+
+    def forward(self) -> to.Tensor:
+        """ Computes the log-likelihood of the time series
 
         Returns:
             to.Tensor: log likelihood of the time series
         """
-        self.forward_pass(probt)
         return to.sum(-self.clist)
