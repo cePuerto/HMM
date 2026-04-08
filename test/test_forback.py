@@ -45,17 +45,24 @@ def test_computes_sb():
     sb = subject.act_weights_ashmm(DATAMOCK, GRAPHS, ARORDERS, MAR)
     bmatrix = sb[0]
     avector = sb[1]
-    assert len(bmatrix) == 5
+    assert len(bmatrix) == NSTATES
+    assert len(avector) == NSTATES
     counter_matrix = 0
     for _, state in enumerate(bmatrix):
-        if to.stack(state).shape == to.Size([5,3,3]):
-            counter_matrix +=1
+        for j, variable in enumerate(state):
+            if variable.shape == to.Size([4,4]) and j !=4:
+                counter_matrix +=1
+            elif variable.shape == to.Size([3,3]) and j==4:
+                counter_matrix +=1
     counter_vector = 0
     for _, state in enumerate(avector):
-        if to.stack(state).shape == to.Size([5,3]):
-            counter_vector +=1
-    assert counter_vector == NSTATES
-    assert counter_matrix == NSTATES
+        for j, variable in enumerate(state):
+            if variable.shape == to.Size([4]) and j !=4:
+                counter_vector +=1
+            elif variable.shape == to.Size([3]) and j==4:
+                counter_vector +=1
+    assert counter_vector == NSTATES*5
+    assert counter_matrix == NSTATES*5
 
 
 

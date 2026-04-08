@@ -184,13 +184,14 @@ class ForwardBackward(nn.Module):
                 if arori[k] > 0:
                     z = to.stack([x[maxar - j : -j, k] for j in range(1, arori[k] + 1)]).transpose(0,1)
                     y = to.cat([y, z], dim=1)
-                a = to.sum(wi * x[maxar:, k][:,None] * y,dim=0)
-                b = [to.sum(wi * y,dim=0)]
+                wiy = wi * y
+                a = to.sum(wiy * x[maxar:, k][:,None],dim=0)
+                b = [to.sum(wiy, dim=0)]
                 for pa in pak:
-                    to.sum(wi * x[maxar:,pa] * y,dim=0)
+                    b.append(to.sum(wiy * x[maxar:,pa][:,None] ,dim=0))
                 for j in range(1, arori[k] + 1):
                     zi = x[maxar - j : -j, k][:,None]
-                    b.append(to.sum(wi * zi * y,dim=0))
+                    b.append(to.sum(wiy * zi,dim=0))
                 bck.append(to.stack(b).transpose(0,1))
                 ack.append(a)
             bc.append(bck)

@@ -86,4 +86,7 @@ PROBT = to.log(to.clip(to.rand([NSTATES,BATCH-MAR]),1e10))
 TRANSITION = to.ones(NSTATES,NSTATES)/NSTATES
 INITIAL = to.ones(NSTATES)/NSTATES
 GRAPHS = to.zeros([NSTATES,5,5])
+for i in range(4):
+    GRAPHS[:,i,i+1] = 1
+
 ARORDERS = 2*to.ones([NSTATES,5]).int()
