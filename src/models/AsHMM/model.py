@@ -196,7 +196,7 @@ class AsHMM(nn.Module):
         self.weights = self.update_weights(s_b)
         self.sigma2 = self.update_sigma2(s_v)
 
- 
+
     def compute_EM(self, x: to.Tensor, cuts: to.Tensor):
         """Performs the EM algorithm for a fixed graph and AR-order
 
@@ -210,6 +210,7 @@ class AsHMM(nn.Module):
         it = 0
         while (error < self.config.training.epsilon and it < self.config.training.nepochs):
             self.update_all(*stats, nseq)
+            self.myforback.clear_statistics()
             [stats, nllike] = self.collect_statistics(x, cuts)
             error = to.abs(nllike-llike)
             it+=1

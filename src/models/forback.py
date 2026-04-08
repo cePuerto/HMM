@@ -23,7 +23,7 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): Temporal probabilities
         """
-        length = len(probt)
+        length = len(probt[0])
         pi = to.clip(self.pi,1e-8)
         alfa = to.log(pi)+ probt[:,0]
         cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
@@ -46,7 +46,7 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): temporal probabilities
         """
-        length = len(probt)
+        length = len(probt[0])
         beta = to.zeros([self.nstates])
         nClist = self.clist.flip(dims=[0])
         beta = beta + nClist[0]
@@ -55,7 +55,7 @@ class ForwardBackward(nn.Module):
             beta = self.backward_step(beta, probt, length-t)
             beta = beta + nClist[t]
             Beta.append(beta)
-        self.beta = to.flipud(to.stack(Beta))
+        self.beta = to.flip(to.stack(Beta),dims=[0])
 
 
     def compute_gamma(self, probt: to.Tensor):
@@ -108,20 +108,9 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): temporal probabilities
         """
-        length = len(probt)
-        bj = probt
-        nume = []
-        deno = []
-        for i in range(self.nstates):
-            alfat = (self.alpha.T[i])[:length-1]
-            betat = self.beta[1:].T
-            num = self.transition[i]*to.sum(to.exp(alfat+betat+ bj[1:].T),dim=1)
-            den = to.sum(num)
-            nume.append(num)
-            deno.append(den)
-        tra_numerator = to.Tensor(nume)
-        tra_denominator = to.Tensor(deno)
-        return [tra_numerator, tra_denominator]
+        num = self.transition*(self.alpha[:-1].T @  (self.beta[1:] * probt[:,1:].T))
+        den = to.sum(num,dim=1)
+        return [num, den]
 
 
     def act_initial(self) -> to.Tensor:
@@ -241,7 +230,7 @@ class ForwardBackward(nn.Module):
 
 
     def forward(self) -> to.Tensor:
-        """ Computes the log-likelihood of the time series
+        """ Computes the log-likelihood of the time series based on the current latent statistics
 
         Returns:
             to.Tensor: log likelihood of the time series
