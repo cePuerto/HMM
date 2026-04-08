@@ -191,7 +191,7 @@ class ForwardBackward(nn.Module):
                 for j in range(1, arori[k] + 1):
                     zi = x[maxar - j : -j, k][:,None]
                     b.append(to.sum(wi * zi * y,dim=0))
-                bck.append(to.stack(b))
+                bck.append(to.stack(b).transpose(0,1))
                 ack.append(a)
             bc.append(bck)
             ac.append(ack)
