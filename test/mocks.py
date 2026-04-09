@@ -83,6 +83,7 @@ DATAMOCK = to.stack(
 )
 NSTATES = 5
 PROBT = to.log(to.clip(to.rand([NSTATES,BATCH-MAR]),1e10))
+MUT = to.ones([NSTATES,BATCH-MAR,5]) 
 TRANSITION = to.ones(NSTATES,NSTATES)/NSTATES
 INITIAL = to.ones(NSTATES)/NSTATES
 GRAPHS = to.zeros([NSTATES,5,5])

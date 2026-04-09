@@ -27,7 +27,7 @@ def test_compute_sa():
     num = sa[0]
     den = sa[1]
     assert num.shape == to.Size([NSTATES,NSTATES])
-    assert den.shape == to.Size([NSTATES])
+    assert den.shape == to.Size([NSTATES,1])
 
 
 def test_compute_sp():
@@ -67,4 +67,11 @@ def test_computes_sb():
 
 
 def test_compute_sv():
-    return 0
+    subject = ForwardBackward(TRANSITION, INITIAL, NSTATES)
+    subject.compute_gamma(PROBT)
+    sv = subject.act_sigma2_ashmm(DATAMOCK, MUT, MAR)
+    num = sv[0]
+    den = sv[1]
+    assert num.shape == to.Size([NSTATES,5])
+    assert den.shape == to.Size([NSTATES,1])
+

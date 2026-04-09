@@ -81,9 +81,8 @@ class ForwardBackward(nn.Module):
             probt (to.Tensor): temporal probabilities
         """
         length = len(probt[0])
-        beta = to.zeros([self.nstates])
         nClist = self.clist.flip(dims=[0])
-        beta = beta + nClist[0]
+        beta = to.zeros([self.nstates])
         Beta = [beta]
         for t in range(1,length):
             beta = self.backward_step(beta, probt, length-t)
@@ -109,8 +108,8 @@ class ForwardBackward(nn.Module):
         Args:
             probt (to.Tensor): temporal probabilities
         """
-        num = self.transition*to.exp(self.alpha[:-1].T @  (self.beta[1:] * probt[:,1:].T))
-        den = to.sum(num,dim=1)
+        num = self.transition*(to.exp(self.alpha[:-1].T) @  to.exp((self.beta[1:] + probt[:,1:].T)))
+        den = to.sum(num,dim=1)[:,None]
         return [num, den]
 
 
@@ -210,15 +209,9 @@ class ForwardBackward(nn.Module):
         Returns:
             list: [numerator, denominator] updating statistics
         """
-        nums = []
-        dens = []
-        for i in range(self.nstates):
-            wi= self.gamma[i]
-            num = to.sum(wi*((x[maxar:]-mut[i]).transpose(0,1))**2,dim=1)
-            den = to.sum(wi)
-            nums.append(num)
-            dens.append(den)
-        return [to.stack(nums), to.stack(dens)]
+        nums = to.sum(self.gamma.T[:,:,None]*((x[maxar:][None,:] - mut)**2),dim=1)
+        dens = to.sum(self.gamma,dim=0)[:,None]
+        return [nums, dens]
 
 
     def clear_statistics(self):

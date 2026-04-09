@@ -2,7 +2,7 @@ import torch as to
 from torch import nn
 from torch.linalg import solve
 from src.pydant import ModelGeneralConfig
-from src.models.AsHMM.BayesianNetworks import LGBayesianNetwork
+from src.models.AsHMM.BayesianNetworks import LGBayesianNetwork as lgb
 from src.models.forback import ForwardBackward
 
 class AsHMM(nn.Module):
@@ -10,16 +10,16 @@ class AsHMM(nn.Module):
     def __init__(self, config: ModelGeneralConfig):
         super(AsHMM, self).__init__()
         self.config = config
-        self.transition = nn.Parameter(to.ones([config.nhidden, config.nhidden])/config.nhidden)
-        self.initial = nn.Parameter(to.ones(config.nhidden)/config.nhidden)
-        self.graphs = nn.Parameter(to.zeros([config.nhidden, config.nfeatures, config.nfeatures]))
-        self.arorders = nn.Parameter(to.zeros([config.nhidden, config.nfeatures]))
-        self.sigma2 = nn.Parameter(to.ones([config.nhidden, config.nfeatures]),requires_grad=False)
-        self.weights = nn.Parameter(to.zeros([config.nhidden, config.nfeatures, config.nfeatures + config.arorder]),requires_grad=False)
+        self.transition = to.ones([config.nhidden, config.nhidden])/config.nhidden
+        self.initial = to.ones(config.nhidden)/config.nhidden
+        self.graphs = to.zeros([config.nhidden, config.nfeatures, config.nfeatures]).int()
+        self.arorders = to.zeros([config.nhidden, config.nfeatures]).int()
+        self.sigma2 = to.ones([config.nhidden, config.nfeatures])
+        self.weights = to.zeros([config.nhidden, config.nfeatures, config.nfeatures + config.arorder])
         self.nstates = config.nhidden
         self.marorder = config.arorder
         self.nfeatures = config.nfeatures
-        self.lgnetworks = LGBayesianNetwork(self.graphs)
+        self.lgnetworks = lgb(self.graphs)
         self.relevancies = config.saliencies
         self.myforback = ForwardBackward(self.transition, self.initial, self.nstates)
 
@@ -38,8 +38,6 @@ class AsHMM(nn.Module):
         for i in range(self.nstates):
             self.weights[i,:self.nfeatures, :self.nfeatures] = to.diag(means[i])
             self.sigma2[i] = sigmas2
-        self.weights.requires_grad=True
-        self.sigma2.requires_grad=True
 
 
     def compute_mut_all(self, x: to.Tensor, cuts: list[int])-> list[to.Tensor]:
@@ -70,8 +68,8 @@ class AsHMM(nn.Module):
         Returns:
             to.Tensor: log-likelihoods for each hidden state, time instance and feature
         """
-        return to.sum(-0.5*(to.log(2.* to.Tensor([to.pi]))+to.log(self.sigma2)[:,None,:]+
-                     (((x[self.marorder:])[None,:]-tmu))**2/self.sigma2[:,None,:]),dim=2)
+        return to.sum(-0.5 * (to.log(2. * to.Tensor([to.pi]))+ to.log(self.sigma2)[:,None,:]+
+                     ((x[self.marorder:])[None,:]-tmu)**2/self.sigma2[:,None,:]),dim=2)
 
 
     def compute_probt_all(self, x: to.Tensor, cuts: list[int], meant : list) -> list[to.Tensor]:
@@ -102,14 +100,14 @@ class AsHMM(nn.Module):
         s_p = self.myforback.act_initial()
         s_a = self.myforback.act_transition(prob_list[0])
         s_b = self.myforback.act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
-        s_v = self.myforback.act_sigma2_ashmm(x, meant_all, self.marorder)
+        s_v = self.myforback.act_sigma2_ashmm(x, meant_all[0], self.marorder)
         loglikelihood = self.myforback()
         for i in range(1,len(prob_list)):
             self.myforback.compute_gamma(prob_list[i])
             s_p += self.myforback.act_initial()
             s_a += self.myforback.act_transition(prob_list[i])
             s_b += self.myforback.act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
-            s_v += self.myforback.act_sigma2_ashmm(x, meant_all, self.marorder)
+            s_v += self.myforback.act_sigma2_ashmm(x, meant_all[i], self.marorder)
             loglikelihood += self.myforback()
         return [[s_p, s_a, s_b, s_v], loglikelihood]
 
@@ -124,12 +122,7 @@ class AsHMM(nn.Module):
             to.Tensor: an updated transition matrix
         """
         numa, dena = s_a
-        ntransition = to.ones([self.nstates,self.nstates])
-        for j in range(self.nstates):
-            ntransition[j] = numa[j]/dena[j]
-            for k in range(self.nstates):
-                ntransition[k][j] = numa[k][j]/dena[k]
-        return ntransition
+        return numa/dena
 
 
     def update_initial(self, s_p : list, n_series: int) -> to.Tensor:
@@ -155,17 +148,21 @@ class AsHMM(nn.Module):
             to.Tensor: updated weights 
         """
         bc , ac = s_b
-        nweight = []
+        nweight = to.zeros([self.nstates, self.nfeatures, self.nfeatures+self.marorder])
         for i in range(self.nstates):
-            bi = []
             for k in range(self.nfeatures):
-                if to.prod(bc[i][k].shape)> 1:
+                if bc[i][k].shape.numel() > 1:
                     bik = solve(bc[i][k],ac[i][k])
                 else:
                     bik = (ac[i][k]/bc[i][k])[0]
-                bi.append(bik)
-            nweight.append(bi)
-        return to.Tensor(nweight)
+                pa_ik = lgb.my_parents(self.graphs[i],k)
+                nweight[i][k][k] = bik[0]
+                for j, pa in enumerate(pa_ik): 
+                    nweight[i][k][pa] = bik[j+1]
+                for j in range(self.arorders[i][k]):
+                    nweight[i][k][self.nfeatures+j] = bik[1+len(pa_ik)+j]
+
+        return nweight
 
 
     def update_sigma2(self, s_v : list)-> to.Tensor:
@@ -195,6 +192,15 @@ class AsHMM(nn.Module):
         self.initial = self.update_initial(s_p, nseq)
         self.weights = self.update_weights(s_b)
         self.sigma2 = self.update_sigma2(s_v)
+        # print("New parameters:")
+        # print("*"*20)
+        # print("A: ",self.transition)
+        # print("*"*20)
+        # print("pi: ", self.initial)
+        # print("*"*20)
+        # print("B: ", self.weights)
+        # print("*"*20)
+        # print("S: ", self.sigma2)
 
 
     def compute_EM(self, x: to.Tensor, cuts: to.Tensor):
@@ -208,9 +214,10 @@ class AsHMM(nn.Module):
         [stats,llike] = self.collect_statistics(x, cuts)
         error = 1e10
         it = 0
-        while (error < self.config.training.epsilon and it < self.config.training.nepochs):
+        while (error > self.config.training.epsilon and it < self.config.training.nepochs):
             self.update_all(*stats, nseq)
-            self.myforback.clear_statistics()
             [stats, nllike] = self.collect_statistics(x, cuts)
             error = to.abs(nllike-llike)
+            print(f"Iteration : {it}, error: {error}, ll: {nllike}")
+            llike = nllike
             it+=1

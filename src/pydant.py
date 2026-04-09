@@ -28,13 +28,13 @@ class TrainModel(BaseModel):
     nepochs : int
     learningrate: float
     epsilon: float
-    inputfiles : list[str]
-    left2right : bool
-    checkpoint: str
-    savepath : str
-    viterbi : ViterbiConfig
-    bayesnet : BNSettings
-    relevancy : RelevancySettings
+    inputfiles : list[str] | None
+    left2right : bool | None
+    checkpoint: str | None
+    savepath : str | None
+    viterbi : ViterbiConfig | None
+    bayesnet : BNSettings | None
+    relevancy : RelevancySettings | None
 
 
 class TestModel(BaseModel):
