@@ -173,7 +173,7 @@ class ForwardBackward(nn.Module):
         ac = []
         for i in range(self.nstates):
             gi = graphs[i]
-            wi = self.gamma[:, i][:,None]
+            wi = to.exp(self.gamma[:, i][:,None])
             arori = arorders[i]
             ack = []
             bck = []
@@ -209,8 +209,8 @@ class ForwardBackward(nn.Module):
         Returns:
             list: [numerator, denominator] updating statistics
         """
-        nums = to.sum(self.gamma.T[:,:,None]*((x[maxar:][None,:] - mut)**2),dim=1)
-        dens = to.sum(self.gamma,dim=0)[:,None]
+        nums = to.sum(to.exp(self.gamma.T[:,:,None])*((x[maxar:][None,:] - mut)**2),dim=1)
+        dens = to.sum(to.exp(self.gamma),dim=0)[:,None]
         return [nums, dens]
 
 
