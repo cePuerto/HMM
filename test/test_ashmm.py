@@ -1,4 +1,4 @@
-from src.models.AsHMM.model import AsHMM
+from src.models.AsHMM.AsHMM import AsHMM
 from src.pydant import ModelGeneralConfig
 from test.mocks import *
 

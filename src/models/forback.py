@@ -5,10 +5,9 @@ from src.models.AsHMM.BayesianNetworks import LGBayesianNetwork as lgb
 
 class ForwardBackward(nn.Module):
 
-    def __init__(self, transition: to.Tensor, pi: to.Tensor, nstates: int):
+    def __init__(self, nstates: int):
         super(ForwardBackward, self).__init__()
-        self.transition = transition
-        self.pi = pi
+        self.temporal_prob_full = None
         self.nstates = nstates
         self.alpha = None
         self.beta = None
@@ -18,10 +17,11 @@ class ForwardBackward(nn.Module):
         self.psi = None
 
 
-    def forward_step(self, alfa: to.Tensor, probt: to.Tensor, t: int) -> to.Tensor:
+    def forward_step(self, transition: to.Tensor,  alfa: to.Tensor, probt: to.Tensor, t: int) -> to.Tensor:
         """ Does an inductive step in the alfa variable
 
         Args:
+            transition (to.Tensor): transition matrix
             alfa (to.Tensor): forward variable
             probt (to.Tensor): temporal probabilities
             t (int): time index
@@ -29,15 +29,16 @@ class ForwardBackward(nn.Module):
         Returns:
             to.Tensor: next forward variable
         """
-        arg = to.exp(alfa) @ self.transition
+        arg = to.exp(alfa) @ transition
         arg = to.clip(arg, 1e-8)
         return probt[:,t]+ to.log(arg)
 
 
-    def backward_step(self,beta : to.Tensor, probt : to.Tensor, t : int)-> to.Tensor:
+    def backward_step(self, transition: to.Tensor, beta : to.Tensor, probt : to.Tensor, t : int)-> to.Tensor:
         """ An iteration in the backward variable
 
         Args:
+            transition (to.Tensor): transition matrix
             beta (to.Tensor): backward variable
             probt (to.Tensor): temporal probabilities
             t (int): time index
@@ -46,26 +47,28 @@ class ForwardBackward(nn.Module):
             to.Tensor: next backward variable
         """
         maxi = to.max(beta)
-        arg = self.transition @ to.exp(probt[:,t]+beta-maxi)
+        arg = transition @ to.exp(probt[:,t]+beta-maxi)
         arg = to.clip(arg,1e-8)
         return  maxi+to.log(arg)
 
 
-    def forward_pass(self, probt: to.Tensor):
+    def forward_pass(self, initial: to.Tensor, transition: to.Tensor, probt: to.Tensor):
         """Forward pass of theforward-backward algorithm
 
         Args:
+            initial (to.Tensor): initial state distribution
+            transition (to.Tensor): transition matrix
             probt (to.Tensor): Temporal probabilities
         """
         length = len(probt[0])
-        pi = to.clip(self.pi,1e-8)
+        pi = to.clip(initial,1e-8)
         alfa = to.log(pi)+ probt[:,0]
         cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
         Clist = to.Tensor([cd])
         alfa = alfa+cd
         Alfa = [alfa]
         for t in range(1,length):
-            alfa = self.forward_step(alfa, probt, t)
+            alfa = self.forward_step(transition, alfa, probt, t)
             cd = -to.max(alfa)-to.logsumexp(alfa-to.max(alfa),0)
             Clist = to.cat([Clist,to.Tensor([cd])])
             alfa = cd + alfa
@@ -74,10 +77,11 @@ class ForwardBackward(nn.Module):
         self.clist = Clist
 
 
-    def backward_pass(self, probt: to.Tensor):
+    def backward_pass(self, transition: to.Tensor, probt: to.Tensor):
         """Backwars pass of the forward-backward algorithm
 
         Args:
+            transition (to.Tensor): transition matrix
             probt (to.Tensor): temporal probabilities
         """
         length = len(probt[0])
@@ -85,30 +89,37 @@ class ForwardBackward(nn.Module):
         beta = to.zeros([self.nstates])
         Beta = [beta]
         for t in range(1,length):
-            beta = self.backward_step(beta, probt, length-t)
+            beta = self.backward_step(transition, beta, probt, length-t)
             beta = beta + nClist[t]
             Beta.append(beta)
         self.beta = to.flip(to.stack(Beta),dims=[0])
 
 
-    def compute_gamma(self, probt: to.Tensor):
+    def compute_gamma(self, initial: to.Tensor, transition: to.Tensor, probt_full: to.Tensor):
+        """Compute Gamma or the latent probabilities
+
+        Args:
+            initial (to.Tensor): initial state probabilities
+            transition (to.Tensor): transition matrix
+            probt (to.Tensor): temporal probabilities [nstates, length, nfeatures]
         """
-        Compute Gamma or the latent probabilities
-        """
-        self.forward_pass(probt)
-        self.backward_pass(probt)
+        self.temporal_prob_full = probt_full
+        probt = to.sum(self.temporal_prob_full,dim=2)
+        self.forward_pass(initial, transition, probt)
+        self.backward_pass(transition, probt)
         num = self.alpha +self.beta
         den = to.log(to.sum(to.exp(self.alpha+self.beta),dim=1))[None,:].T
         self.gamma = num-den
 
 
-    def act_transition(self,probt: to.Tensor):
+    def act_transition(self,transition: to.Tensor, probt: to.Tensor):
         """Computes statistics to update the transition matrix
 
         Args:
+            transition (to.Tensor): transition matrix
             probt (to.Tensor): temporal probabilities
         """
-        num = self.transition*(to.exp(self.alpha[:-1].T) @  to.exp((self.beta[1:] + probt[:,1:].T)))
+        num = transition*(to.exp(self.alpha[:-1].T) @  to.exp((self.beta[1:] + probt[:,1:].T)))
         den = to.sum(num,dim=1)[:,None]
         return [num, den]
 
@@ -223,6 +234,7 @@ class ForwardBackward(nn.Module):
         self.gamma = None
         self.phi = None
         self.psi = None
+        self.temporal_prob_full = None
 
 
     def forward(self) -> to.Tensor:

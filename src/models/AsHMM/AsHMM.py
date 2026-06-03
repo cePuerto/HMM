@@ -22,15 +22,16 @@ class AsHMM(nn.Module):
         self.nparams = 0
         self.lgnetworks = lgb(self.graphs)
         self.relevancies = config.saliencies
-        self.myforback = ForwardBackward(self.transition, self.initial, self.nstates)
+        self.myforback = []
 
 
-    def init_params(self, x :to.Tensor):
+    def init_params(self, x :to.Tensor, cuts: to.Tensor):
         """Given an input, it creates strating search points for weights and standard deviations
         this method is required to activate weights' and variances' autograd property
 
         Args:
-            x (to.Tensor): input tensor
+            x (to.Tensor): input sequences
+            cuts(to.tensor): cut points for the input sequences
         """
         maximum = to.amax(x, dim=0)
         minimum = to.amin(x, dim=0)
@@ -39,7 +40,8 @@ class AsHMM(nn.Module):
         for i in range(self.nstates):
             self.weights[i,:self.nfeatures, :self.nfeatures] = to.diag(means[i])
             self.sigma2[i] = sigmas2
-        self.nparams = self.nstates(1+self.nstates)+ to.sum(self.graphs)
+        self.nparams = self.nstates*(1+self.nstates+self.nfeatures)+ to.sum(self.graphs).item()
+        self.myforback = [ForwardBackward(self.nstates) for _ in range(len(cuts)-1)]
 
 
     def penalty(self,graph: to.Tensor, arorders: to.Tensor, length: int)->list:
@@ -57,7 +59,7 @@ class AsHMM(nn.Module):
         return [-b*0.5*to.log(length),b.int()]
 
 
-    def compute_mut_all(self, x: to.Tensor, cuts: list[int], weights: to.Tensor, arorders: to.Tensor)-> list[to.Tensor]:
+    def compute_mut_all(self, x: to.Tensor, cuts: list[int], graphs: to.Tensor, weights: to.Tensor, arorders: to.Tensor)-> list[to.Tensor]:
         """Computes temporal means for each input time series divided by cut
 
         Args:
@@ -68,6 +70,7 @@ class AsHMM(nn.Module):
         Returns:
             list[to.Tensor]: returns a list with tensors with the temporal mean for each time series
         """
+        self.lgnetworks.update_graphs(graphs)
         return [self.lgnetworks.lg_temp_mu_all(
             x[cuts[i]:cuts[i+1]],
             weights,
@@ -114,6 +117,27 @@ class AsHMM(nn.Module):
         return [self.compute_probt(x[cuts[i]:cuts[i+1]],meant[i], sigma2, reduction) for i in range(len(cuts)-1)]
 
 
+    def compute_gamma_all(self, x: to.Tensor, cuts: to.Tensor, graphs: to.Tensor, weights: to.Tensor, sigma2: to.Tensor, arorders: to.Tensor) ->list:
+        """Computes all the gamma statistics for all the time series
+
+        Args:
+            x (to.Tensor): concatenated time series 
+            cuts (to.Tensor): cuts  for input time series
+            graphs (to.Tensor): tensor representing the graphs
+            weights (to.Tensor): tensor representing the weights
+            sigma2 (to.Tensor): Variances matrix
+            arorders (to.Tensor): tensor representing the AR orders
+
+        Returns:
+            list: [all temporal means, all temporal full probabilities
+        """
+        meant_all = self.compute_mut_all(x, cuts, graphs, weights, arorders)
+        prob_list = self.compute_probt_all(x, cuts, meant_all, sigma2, reduction=None)
+        for i, probt_full  in enumerate(prob_list):
+            self.myforback[i].compute_gamma(self.initial, self.transition, probt_full)
+        return meant_all, prob_list
+
+
     def collect_statistics(self, x: to.Tensor, cuts: to.Tensor) -> list:
         """Computes latent probabilities and statistics to update parameters
 
@@ -121,21 +145,21 @@ class AsHMM(nn.Module):
             x (to.Tensor): input timeseries
             cuts (to.Tensor): cuts for the timeseries
         """
-        meant_all = self.compute_mut_all(x, cuts, self.weights, self.arorders)
-        prob_list = self.compute_probt_all(x, cuts, meant_all, self.sigma2)
-        self.myforback.compute_gamma(prob_list[0])
-        s_p = self.myforback.act_initial()
-        s_a = self.myforback.act_transition(prob_list[0])
-        s_b = self.myforback.act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
-        s_v = self.myforback.act_sigma2_ashmm(x, meant_all[0], self.marorder)
-        loglikelihood = self.myforback()
-        for i in range(1,len(prob_list)):
-            self.myforback.compute_gamma(prob_list[i])
-            s_p += self.myforback.act_initial()
-            s_a += self.myforback.act_transition(prob_list[i])
-            s_b += self.myforback.act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
-            s_v += self.myforback.act_sigma2_ashmm(x, meant_all[i], self.marorder)
-            loglikelihood += self.myforback()
+        meant_all = self.compute_mut_all(x, cuts, self.graphs, self.weights, self.arorders)
+        prob_list_full = self.compute_probt_all(x, cuts, meant_all, self.sigma2, reduction=None)
+        self.myforback[0].compute_gamma(self.initial, self.transition, prob_list_full[0])
+        s_p = self.myforback[0].act_initial()
+        s_a = self.myforback[0].act_transition(self.transition, to.sum(prob_list_full[0],dim = 2))
+        s_b = self.myforback[0].act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
+        s_v = self.myforback[0].act_sigma2_ashmm(x, meant_all[0], self.marorder)
+        loglikelihood = self.myforback[0]()
+        for i in range(1,len(prob_list_full)):
+            self.myforback[i].compute_gamma(self.initial, self.transition, prob_list_full[i])
+            s_p += self.myforback[i].act_initial()
+            s_a += self.myforback[i].act_transition(self.transition, to.sum(prob_list_full[i],dim2 = 2))
+            s_b += self.myforback[i].act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
+            s_v += self.myforback[i].act_sigma2_ashmm(x, meant_all[i], self.marorder)
+            loglikelihood += self.myforback[i]()
         return [[s_p, s_a, s_b, s_v], loglikelihood]
 
 
@@ -221,13 +245,16 @@ class AsHMM(nn.Module):
         self.sigma2 = self.update_sigma2(s_v)
 
 
-    def compute_EM(self, x: to.Tensor, cuts: to.Tensor):
+    def compute_EM(self, x: to.Tensor, cuts: to.Tensor, reset : bool = False):
         """Performs the EM algorithm for a fixed graph and AR-order
 
         Args:
             x (to.Tensor): input sequences
             cuts (to.Tensor): cuts of the time series
+            reset (bool): whether to reset the model parameters
         """
+        if reset or len(self.myforback) == 0:
+            self.init_params(x, cuts)
         nseq = len(cuts)-1
         [stats,llike] = self.collect_statistics(x, cuts)
         error = 1e10
@@ -241,7 +268,7 @@ class AsHMM(nn.Module):
             it+=1
 
 
-    def local_score(self, probt: to.Tensor, pena: float, target_state: int, target_feature: int)->to.Tensor:
+    def local_score(self, pena: float, target_state: int, target_feature: int)->to.Tensor:
         """ Computes local score for a given state 
 
         Args:
@@ -254,10 +281,8 @@ class AsHMM(nn.Module):
             to.Tensor: local score fro SEM optimization
         """
         local_s = 0.
-        for _, probti in enumerate(probt):
-            fprobti = to.sum(probti,dim=2)
-            self.myforback.compute_gamma(fprobti)
-            local_s += to.sum(self.myforback.gamma[:,target_state]*to.probt[target_state,:,target_feature])
+        for forback in self.myforback:
+            local_s += to.sum(forback.gamma[:,target_state]*forback.temporal_prob_full[target_state,:,target_feature])
         return local_s+pena
     
 
@@ -309,11 +334,8 @@ class AsHMM(nn.Module):
         """
         for i in range(self.nstates):
             for k in range(self.nfeatures):
-                mut_all = self.compute_mut_all(x, cuts, self.weights, self.arorders)
-                probt_all = self.compute_probt_all(x, cuts, mut_all, self.sigma2, reduction=None)
-                self.myforback.gamma(to.sum(probt_all,dim=2))
                 base_pen = self.penalty(self.graphs, self.arorders, cuts)
-                sm = self.local_score(probt_all, base_pen, i, k)
+                sm = self.local_score(base_pen, i, k)
                 while self.arorders[i][k] +1 <= self.marorder :
                     arord2 = to.clone(self.arorders)
                     arord2[i][k] = arord2[i][k] +1
@@ -356,41 +378,41 @@ class AsHMM(nn.Module):
         return index
     
 
-    def climb_struc(self,tb,ts): 
-        """
-        Looks for the best graphical structure, uses an upward greedy algorithm
+    # def climb_struc(self,tb,ts): 
+    #     """
+    #     Looks for the best graphical structure, uses an upward greedy algorithm
 
-        Parameters
-        ----------
-        tb : TYPE boolean list 
-            DESCRIPTION. indices to be updated of the parameter B
-        ts : TYPE boolean list
-            DESCRIPTION. indices to be updated of the parameter sigma
-        """
-        for i in range(self.N):
-            if tb[i] ==1 or ts[i]==1 :
-                for k in range(self.K):
-                    possi = self.pos_ads(self.G[i])
-                    son = possi[k][0]
-                    if len(possi[k][1])!=0:
-                        sm = self.local_score(self.G,self.p,self.sigma,i,son)[0]
-                        for j in possi[k][1]:
-                            G2 = np.copy(self.G)
-                            G2[i][son][j] =1
-                            L2 = []
-                            for nn in range(self.N):
-                                L2.append(self.dag_v(G2[nn])[1])
-                            [s2,B2,sigma2,b2] = self.score_complete_info_estimation_local(G2,self.L,self.p,i,son,tb,ts)
-                            if s2>sm: # Teorema: Irresoluble
-                                sm= s2
-                                self.B = B2
-                                self.b = b2
-                                self.sigma = sigma2
-                                self.G = G2
-                                self.L = L2
+    #     Parameters
+    #     ----------
+    #     tb : TYPE boolean list 
+    #         DESCRIPTION. indices to be updated of the parameter B
+    #     ts : TYPE boolean list
+    #         DESCRIPTION. indices to be updated of the parameter sigma
+    #     """
+    #     for i in range(self.N):
+    #         if tb[i] ==1 or ts[i]==1 :
+    #             for k in range(self.K):
+    #                 possi = self.pos_ads(self.G[i])
+    #                 son = possi[k][0]
+    #                 if len(possi[k][1])!=0:
+    #                     sm = self.local_score(self.G,self.p,self.sigma,i,son)[0]
+    #                     for j in possi[k][1]:
+    #                         G2 = np.copy(self.G)
+    #                         G2[i][son][j] =1
+    #                         L2 = []
+    #                         for nn in range(self.N):
+    #                             L2.append(self.dag_v(G2[nn])[1])
+    #                         [s2,B2,sigma2,b2] = self.score_complete_info_estimation_local(G2,self.L,self.p,i,son,tb,ts)
+    #                         if s2>sm: # Teorema: Irresoluble
+    #                             sm= s2
+    #                             self.B = B2
+    #                             self.b = b2
+    #                             self.sigma = sigma2
+    #                             self.G = G2
+    #                             self.L = L2
 
                                 
-        self.act_mut(self.G,self.B,self.p)
+    #     self.act_mut(self.G,self.B,self.p)
 
 
     def hill_climb(self, lags : bool, struct: bool, x: to.Tensor, cuts: to.Tensor):
@@ -404,7 +426,44 @@ class AsHMM(nn.Module):
         """
         if lags is True:
             self.climb_ar(x, cuts)
-        if struct is True:
-            self.climb_struc()
+        # if struct is True:
+        #     self.climb_struc()
 
 
+    def SEM(self, err1=1e-2,err2=1e-2,its1=100,its2=100): 
+        """
+        Does the SEM algorithm for parameter and structure learning
+
+        Parameters
+        ----------
+        err1 : TYPE, optional float
+            DESCRIPTION. The default is 1e-2. Maximum SEM error allowed
+        err2 : TYPE, optional float
+            DESCRIPTION. The default is 1e-2. Maximum EM error allowed
+        its1 : TYPE, optional int
+            DESCRIPTION. The default is 100. Maximum SEM iterations
+        its2 : TYPE, optional int
+            DESCRIPTION. The default is 100. Maximum EM iterations 
+        ta : TYPE, optional  boolean list
+            DESCRIPTION. The default is "all".  list that gives the indices of rows and columns of A to be updated.
+        tpi : TYPE, optional bool
+            DESCRIPTION. The default is True. Updates or not the initial distribution
+        tb : TYPE, optional boolean list
+            DESCRIPTION. The default is "all". indices to be updated of the parameter B
+        ts : TYPE, optional boolean list
+            DESCRIPTION. The default is "all". list that gives the indices of which hidden-states variances are updated 
+        ps : TYPE, optional int
+            DESCRIPTION. The default is None. index of the initial distibution
+        """
+        eps = 1
+        it = 0
+        likelihood = [ ]
+        self.EM(its2,err2,ta=ta,tb=tb,tpi=tpi,ts=ts,ps=ps)
+        likelihood.append(self.bic)
+        while eps > err1 and it < its1:
+            self.hill_climb(tb,ts)
+            self.EM(its2,err2,ta=ta,tb=tb,tpi=tpi,ts=ts,ps=ps)
+            eps = np.abs((self.bic-likelihood[-1]))
+            likelihood.append(self.bic)
+            it = it+1
+       

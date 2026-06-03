@@ -24,7 +24,7 @@ class BNSettings(BaseModel):
     savepathtop : str = ""
 
 
-class TrainModel(BaseModel):
+class TrainModelConfig(BaseModel):
     nepochs : int
     learningrate: float
     epsilon: float
@@ -37,7 +37,7 @@ class TrainModel(BaseModel):
     relevancy : RelevancySettings | None
 
 
-class TestModel(BaseModel):
+class TestModelConfig(BaseModel):
     checkpoint : str
     inputfiles : list[str]
     viterbi : ViterbiConfig
@@ -53,8 +53,8 @@ class ModelGeneralConfig(BaseModel):
     saliencies: bool
     arorder : int = 0
     bayesnetwork: bool
-    training : TrainModel | None
-    testing : TestModel | None
+    training : TrainModelConfig | None
+    testing : TestModelConfig | None
 
 
 def return_schema(path: str):
