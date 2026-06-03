@@ -19,6 +19,7 @@ class AsHMM(nn.Module):
         self.nstates = config.nhidden
         self.marorder = config.arorder
         self.nfeatures = config.nfeatures
+        self.nparams = 0
         self.lgnetworks = lgb(self.graphs)
         self.relevancies = config.saliencies
         self.myforback = ForwardBackward(self.transition, self.initial, self.nstates)
@@ -38,9 +39,25 @@ class AsHMM(nn.Module):
         for i in range(self.nstates):
             self.weights[i,:self.nfeatures, :self.nfeatures] = to.diag(means[i])
             self.sigma2[i] = sigmas2
+        self.nparams = self.nstates(1+self.nstates)+ to.sum(self.graphs)
 
 
-    def compute_mut_all(self, x: to.Tensor, cuts: list[int])-> list[to.Tensor]:
+    def penalty(self,graph: to.Tensor, arorders: to.Tensor, length: int)->list:
+        """Calculates the Bayesian informaticon criterion BIC penalty for the provided graph
+
+        Args:
+            graph (to.Tensor): Bayesian network  
+            arorders (to.Tensor): AR orders
+            length (int): lengths
+
+        Returns:
+            list: [BIC penalty, Number parameters]
+        """
+        b= to.sum(graph)+ self.nstates*(1 + self.nfeatures + self.nstates)+to.sum(arorders)
+        return [-b*0.5*to.log(length),b.int()]
+
+
+    def compute_mut_all(self, x: to.Tensor, cuts: list[int], weights: to.Tensor, arorders: to.Tensor)-> list[to.Tensor]:
         """Computes temporal means for each input time series divided by cut
 
         Args:
@@ -53,49 +70,59 @@ class AsHMM(nn.Module):
         """
         return [self.lgnetworks.lg_temp_mu_all(
             x[cuts[i]:cuts[i+1]],
-            self.weights,
-            self.arorders,
+            weights,
+            arorders,
             self.marorder) for i in range(len(cuts)-1)]
 
 
-    def compute_probt(self, x: to.Tensor, tmu: to.Tensor)->to.Tensor:
+    def compute_probt(self, x: to.Tensor, tmu: to.Tensor, sigma2: to.Tensor, reduction : list[int] = 2)->to.Tensor:
         """Computes the log-likelihood of each feature for each hidden state
 
         Args:
             x (to.Tensor): input time series
             tmu (to.Tensor): temporal mean for each hidden states, time instance and feature
+            sigma2 (to.Tensor): Variances matrix
+            reduction (list[int]|None): Reduction using sum for the output 
+            prob of shape [nstates,length,nfeatures], if None, no reduction is performed. Default: [2]
 
         Returns:
-            to.Tensor: log-likelihoods for each hidden state, time instance and feature
+            to.Tensor: log-likelihoods for the specified reduction 
         """
-        return to.sum(-0.5 * (to.log(2. * to.Tensor([to.pi]))+ to.log(self.sigma2)[:,None,:]+
-                     ((x[self.marorder:])[None,:]-tmu)**2/self.sigma2[:,None,:]),dim=2)
+        if reduction is not None:
+            return to.sum(-0.5 * (to.log(2. * to.Tensor([to.pi]))+ to.log(sigma2)[:,None,:]+
+                        ((x[self.marorder:])[None,:]-tmu)**2/self.sigma2[:,None,:]),dim= reduction)
+        else:
+            return -0.5 * (to.log(2. * to.Tensor([to.pi]))+ to.log(sigma2)[:,None,:]+
+                        ((x[self.marorder:])[None,:]-tmu)**2/sigma2[:,None,:])
 
 
-    def compute_probt_all(self, x: to.Tensor, cuts: list[int], meant : list) -> list[to.Tensor]:
+    def compute_probt_all(self, x: to.Tensor, cuts: list[int], meant : list, sigma2: to.Tensor, reduction : list[int] = 2) -> list[to.Tensor]:
         """Computes the temporal log-likelihood for each time series 
 
         Args:
             x (to.Tensor): concatenated time series 
             cuts (list[int]): cuts determining the start and end of each time series eg. [0, len(x)] for a single time series
-            [0,len(x_1),len(x1)+len(x2)] for two time series
+            [0, len(x_1),len(x1)+len(x2)] for two time series
             meant (list): temporal means 
+            sigma2 (to.Tensor): Variances matrix
+            reduction (list[int]|None): Reduction using sum for the output 
+            prob of shape [nstates,length,nfeatures], if None, no reduction is performed. Default: [2]
 
         Returns:
             list[to.Tensor]: temporal log-likelihood for each input time series
         """
-        return [self.compute_probt(x[cuts[i]:cuts[i+1]],meant[i]) for i in range(len(cuts)-1)]
+        return [self.compute_probt(x[cuts[i]:cuts[i+1]],meant[i], sigma2, reduction) for i in range(len(cuts)-1)]
 
 
-    def collect_statistics(self,x: to.Tensor, cuts: to.Tensor) -> list:
+    def collect_statistics(self, x: to.Tensor, cuts: to.Tensor) -> list:
         """Computes latent probabilities and statistics to update parameters
 
         Args:
             x (to.Tensor): input timeseries
             cuts (to.Tensor): cuts for the timeseries
         """
-        meant_all = self.compute_mut_all(x, cuts)
-        prob_list = self.compute_probt_all(x, cuts, meant_all)
+        meant_all = self.compute_mut_all(x, cuts, self.weights, self.arorders)
+        prob_list = self.compute_probt_all(x, cuts, meant_all, self.sigma2)
         self.myforback.compute_gamma(prob_list[0])
         s_p = self.myforback.act_initial()
         s_a = self.myforback.act_transition(prob_list[0])
@@ -192,15 +219,6 @@ class AsHMM(nn.Module):
         self.initial = self.update_initial(s_p, nseq)
         self.weights = self.update_weights(s_b)
         self.sigma2 = self.update_sigma2(s_v)
-        # print("New parameters:")
-        # print("*"*20)
-        # print("A: ",self.transition)
-        # print("*"*20)
-        # print("pi: ", self.initial)
-        # print("*"*20)
-        # print("B: ", self.weights)
-        # print("*"*20)
-        # print("S: ", self.sigma2)
 
 
     def compute_EM(self, x: to.Tensor, cuts: to.Tensor):
@@ -221,3 +239,172 @@ class AsHMM(nn.Module):
             print(f"Iteration : {it}, error: {error}, ll: {nllike}")
             llike = nllike
             it+=1
+
+
+    def local_score(self, probt: to.Tensor, pena: float, target_state: int, target_feature: int)->to.Tensor:
+        """ Computes local score for a given state 
+
+        Args:
+            probt (to.Tensor): Tensor of full probs [nsequences, nstates, length, nfeatures]
+            pena (float): Penalization
+            target_state (int): modified state
+            target_feature (int): modified feature
+
+        Returns:
+            to.Tensor: local score fro SEM optimization
+        """
+        local_s = 0.
+        for _, probti in enumerate(probt):
+            fprobti = to.sum(probti,dim=2)
+            self.myforback.compute_gamma(fprobti)
+            local_s += to.sum(self.myforback.gamma[:,target_state]*to.probt[target_state,:,target_feature])
+        return local_s+pena
+    
+
+    def score_complete_info_estimation_local(
+            self, 
+            x : to.Tensor, 
+            cuts : to.Tensor,
+            prob_list: to.Tensor,
+            meant_all : to.Tensor,
+            graph : to.Tensor,
+            ar_orders : to.Tensor,
+            state: int,
+            feature: int) -> list:
+        """ COmputes local scores for a given state and feature
+
+        Args:
+            x (to.Tensor): input sequence
+            cuts (to.Tensor):  cuts of the time series
+            prob_list (to.Tensor): probabilities for each state and feature
+            meant_all (to.Tensor): means of all states and features
+            graph (to.Tensor): graph to be used
+            ar_orders (to.Tensor): autoregressive orders
+            state (int): hidden state to be updated
+            feature (int): feature to be updated
+
+        Returns:
+            list: [local score, new weights, new variance matrix]
+        """
+        pena = self.penalty(graph, ar_orders, cuts[-1])
+        self.myforback.compute_gamma(prob_list[0])
+        s_b = self.myforback.act_weights_ashmm(x, graph, ar_orders, self.marorder)
+        s_v = self.myforback.act_sigma2_ashmm(x, meant_all[0], self.marorder)
+        for i in range(1,len(prob_list)):
+            self.myforback.compute_gamma(prob_list[i])
+            s_b += self.myforback.act_weights_ashmm(x, self.graphs, self.arorders, self.marorder)
+            s_v += self.myforback.act_sigma2_ashmm(x, meant_all[i], self.marorder)
+        nweight = self.update_weights(s_b)
+        nvar = self.update_sigma2(s_v)
+        nmut = self.compute_mut_all(x, cuts, nweight,ar_orders)
+        nprob = self.compute_probt_all(x,cuts, nmut, nvar,  None)
+        ll = self.local_score(nprob, pena , state, feature)
+        return [ll,nweight,nvar]
+
+
+    def climb_ar(self, x : to.Tensor, cuts: list[int]):
+        """
+        Looks for the best structure in AR components. 
+        Uses a greedy search
+        """
+        for i in range(self.nstates):
+            for k in range(self.nfeatures):
+                mut_all = self.compute_mut_all(x, cuts, self.weights, self.arorders)
+                probt_all = self.compute_probt_all(x, cuts, mut_all, self.sigma2, reduction=None)
+                self.myforback.gamma(to.sum(probt_all,dim=2))
+                base_pen = self.penalty(self.graphs, self.arorders, cuts)
+                sm = self.local_score(probt_all, base_pen, i, k)
+                while self.arorders[i][k] +1 <= self.marorder :
+                    arord2 = to.clone(self.arorders)
+                    arord2[i][k] = arord2[i][k] +1
+                    [s2,nweight,nsigma2] = self.score_complete_info_estimation_local(
+                        x, cuts, probt_all, mut_all, self.graphs, arord2, i, k
+                    )
+                    if s2 > sm:
+                        self.arorders = arord2
+                        self.weights = nweight
+                        self.sigma2 = nsigma2
+                        sm  = s2
+                    else:
+                        break
+
+
+    def pos_ads(self, graph: to.Tensor) -> list:
+        """ Looks for possible arcs to be added to the graph
+
+        Args:
+            graph (to.Tensor): graph representation
+
+        Returns:
+            list: A list where
+        list[.][0] is a node which can recieve edges
+        list[.][1] is a list  of potential fathers
+        """
+        index = []
+        for i in range(self.nfeatures):
+            indexi = [i]
+            indexj =[]
+            for j in range(self.nfeatures):
+                ngraph = to.clone(graph)
+                if ngraph[i][j] != 1:
+                    ngraph[i][j] = 1
+                    [fool, _] = self.lgnetworks.dag_v(ngraph)
+                    if fool  is True:
+                        indexj.append(j)
+            indexi.append(indexj)
+            index.append(indexi)
+        return index
+    
+
+    def climb_struc(self,tb,ts): 
+        """
+        Looks for the best graphical structure, uses an upward greedy algorithm
+
+        Parameters
+        ----------
+        tb : TYPE boolean list 
+            DESCRIPTION. indices to be updated of the parameter B
+        ts : TYPE boolean list
+            DESCRIPTION. indices to be updated of the parameter sigma
+        """
+        for i in range(self.N):
+            if tb[i] ==1 or ts[i]==1 :
+                for k in range(self.K):
+                    possi = self.pos_ads(self.G[i])
+                    son = possi[k][0]
+                    if len(possi[k][1])!=0:
+                        sm = self.local_score(self.G,self.p,self.sigma,i,son)[0]
+                        for j in possi[k][1]:
+                            G2 = np.copy(self.G)
+                            G2[i][son][j] =1
+                            L2 = []
+                            for nn in range(self.N):
+                                L2.append(self.dag_v(G2[nn])[1])
+                            [s2,B2,sigma2,b2] = self.score_complete_info_estimation_local(G2,self.L,self.p,i,son,tb,ts)
+                            if s2>sm: # Teorema: Irresoluble
+                                sm= s2
+                                self.B = B2
+                                self.b = b2
+                                self.sigma = sigma2
+                                self.G = G2
+                                self.L = L2
+
+                                
+        self.act_mut(self.G,self.B,self.p)
+
+
+    def hill_climb(self, lags : bool, struct: bool, x: to.Tensor, cuts: to.Tensor):
+        """Executes a greedy search to add nodes to the graphs
+
+        Args:
+            lags (bool): add temporal nodes?
+            struct (bool): add inter-temporal nodes?
+            x (to.Tensor): input sequences
+            cuts (to.Tensor): cut points for x
+        """
+        if lags is True:
+            self.climb_ar(x, cuts)
+        if struct is True:
+            self.climb_struc()
+
+

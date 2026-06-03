@@ -34,8 +34,17 @@ class LGBayesianNetwork(nn.Module):
         index = to.where(graph[j] == 1)[0]
         return to.sort(index).values
     
+
+    def update_graphs(self, graphs: to.Tensor):
+        """Updates graphs
+
+        Args:
+            graphs (to.Tensor): New graphs
+        """
+        self.graphs = graphs
+
     def my_weights(self, parents: to.Tensor, weight: to.Tensor, aror: to.Tensor, j: int) -> to.Tensor:
-        """ extract the weights from the 
+        """ extract the weights from the  weight tensor 
 
         Args:
             parents (to.Tensor): parents of node j
@@ -213,6 +222,7 @@ class LGBayesianNetwork(nn.Module):
                     sigmas2[i],
                     arorder[i]))
         return params
+
 
     def forward(self):
         """Dummy forward function
