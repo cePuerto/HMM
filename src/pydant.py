@@ -25,9 +25,12 @@ class BNSettings(BaseModel):
 
 
 class TrainModelConfig(BaseModel):
-    nepochs : int
-    learningrate: float
-    epsilon: float
+    nepochs_em : int
+    epsilon_em: float
+    nepochs_sem : int
+    epsilon_sem : float
+    struct_opt : bool
+    ar_opt : bool
     inputfiles : list[str] | None
     left2right : bool | None
     checkpoint: str | None
@@ -51,7 +54,7 @@ class ModelGeneralConfig(BaseModel):
     ncomponents: int
     discrete : bool
     saliencies: bool
-    arorder : int = 0
+    max_ar : int = 0
     bayesnetwork: bool
     training : TrainModelConfig | None
     testing : TestModelConfig | None
